@@ -76,6 +76,7 @@ struct tipc_server;
 extern int tipc_net_id __read_mostly;
 extern int sysctl_tipc_rmem[3] __read_mostly;
 extern int sysctl_tipc_named_timeout __read_mostly;
+extern int sysctl_tipc_congestion_control[2] __read_mostly;
 
 struct tipc_net {
 	u32 own_addr;

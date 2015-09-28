@@ -47,6 +47,13 @@ struct tipc_plist;
 #define TIPC_PUBL_SCOPE_NUM	(TIPC_NODE_SCOPE + 1)
 #define TIPC_NAMETBL_SIZE	1024	/* must be a power of 2 */
 
+/* TIPC congestion levels */
+#define TIPC_CONGESTION_NONE		0
+#define TIPC_CONGESTION_LOW		1
+#define TIPC_CONGESTION_MEDIUM		2
+#define TIPC_CONGESTION_HIGH		3
+#define TIPC_CONGESTION_CRITICAL	4
+
 /**
  * struct publication - info about a published (name or) name sequence
  * @type: name sequence type
@@ -56,6 +63,7 @@ struct tipc_plist;
  * @node: network address of publishing port's node
  * @ref: publishing port
  * @key: publication key
+ * @cong: congestion flag/info
  * @nodesub_list: subscription to "node down" event (off-node publication only)
  * @local_list: adjacent entries in list of publications made by this node
  * @pport_list: adjacent entries in list of publications made by this port
@@ -74,6 +82,7 @@ struct publication {
 	u32 node;
 	u32 ref;
 	u32 key;
+	u32 cong;
 	struct list_head nodesub_list;
 	struct list_head local_list;
 	struct list_head pport_list;
@@ -97,7 +106,8 @@ struct name_table {
 
 int tipc_nl_name_table_dump(struct sk_buff *skb, struct netlink_callback *cb);
 
-u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance, u32 *node);
+u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance, u32 *node,
+			   unsigned int msg_imp);
 int tipc_nametbl_mc_translate(struct net *net, u32 type, u32 lower, u32 upper,
 			      u32 limit, struct tipc_plist *dports);
 struct publication *tipc_nametbl_publish(struct net *net, u32 type, u32 lower,
@@ -107,7 +117,7 @@ int tipc_nametbl_withdraw(struct net *net, u32 type, u32 lower, u32 ref,
 			  u32 key);
 struct publication *tipc_nametbl_insert_publ(struct net *net, u32 type,
 					     u32 lower, u32 upper, u32 scope,
-					     u32 node, u32 ref, u32 key);
+					     u32 node, u32 ref, u32 key, u32 cong);
 struct publication *tipc_nametbl_remove_publ(struct net *net, u32 type,
 					     u32 lower, u32 node, u32 ref,
 					     u32 key);
@@ -129,5 +139,7 @@ static inline void tipc_plist_init(struct tipc_plist *pl)
 
 void tipc_plist_push(struct tipc_plist *pl, u32 port);
 u32 tipc_plist_pop(struct tipc_plist *pl);
+
+int congestion_level (int msg_imp);
 
 #endif

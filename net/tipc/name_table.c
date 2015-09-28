@@ -134,6 +134,7 @@ static struct publication *publ_create(u32 type, u32 lower, u32 upper,
 	publ->node = node;
 	publ->ref = port_ref;
 	publ->key = key;
+	publ->cong = TIPC_CONGESTION_NONE;
 	INIT_LIST_HEAD(&publ->pport_list);
 	return publ;
 }
@@ -233,7 +234,7 @@ static struct publication *tipc_nameseq_insert_publ(struct net *net,
 						    struct name_seq *nseq,
 						    u32 type, u32 lower,
 						    u32 upper, u32 scope,
-						    u32 node, u32 port, u32 key)
+						    u32 node, u32 port, u32 key, u32 cong)
 {
 	struct tipc_subscription *s;
 	struct tipc_subscription *st;
@@ -255,8 +256,10 @@ static struct publication *tipc_nameseq_insert_publ(struct net *net,
 		/* Check if an identical publication already exists */
 		list_for_each_entry(publ, &info->zone_list, zone_list) {
 			if ((publ->ref == port) && (publ->key == key) &&
-			    (!publ->node || (publ->node == node)))
+			    (!publ->node || (publ->node == node))) {
+				publ->cong = cong;
 				return NULL;
+			}
 		}
 	} else {
 		u32 inspos;
@@ -312,6 +315,7 @@ static struct publication *tipc_nameseq_insert_publ(struct net *net,
 
 	/* Insert a publication */
 	publ = publ_create(type, lower, upper, scope, node, port, key);
+	// can a publication be congested when it is published the first time ?Erik
 	if (!publ)
 		return NULL;
 
@@ -459,7 +463,7 @@ static struct name_seq *nametbl_find_seq(struct net *net, u32 type)
 
 struct publication *tipc_nametbl_insert_publ(struct net *net, u32 type,
 					     u32 lower, u32 upper, u32 scope,
-					     u32 node, u32 port, u32 key)
+					     u32 node, u32 port, u32 key, u32 cong)
 {
 	struct tipc_net *tn = net_generic(net, tipc_net_id);
 	struct publication *publ;
@@ -480,7 +484,7 @@ struct publication *tipc_nametbl_insert_publ(struct net *net, u32 type,
 
 	spin_lock_bh(&seq->lock);
 	publ = tipc_nameseq_insert_publ(net, seq, type, lower, upper,
-					scope, node, port, key);
+					scope, node, port, key, cong);
 	spin_unlock_bh(&seq->lock);
 	return publ;
 }
@@ -508,6 +512,25 @@ struct publication *tipc_nametbl_remove_publ(struct net *net, u32 type,
 	return publ;
 }
 
+
+/* returns congestion level based on message importance */
+int congestion_level (int msg_imp)
+{
+	switch (msg_imp) {
+		case TIPC_LOW_IMPORTANCE:
+			return TIPC_CONGESTION_LOW;
+		case TIPC_MEDIUM_IMPORTANCE:
+			return TIPC_CONGESTION_MEDIUM;
+		case TIPC_HIGH_IMPORTANCE:
+			return TIPC_CONGESTION_HIGH;
+		case TIPC_CRITICAL_IMPORTANCE:
+			return TIPC_CONGESTION_CRITICAL;
+		default:
+			return TIPC_CONGESTION_NONE;
+	}
+}
+
+
 /**
  * tipc_nametbl_translate - perform name translation
  *
@@ -522,7 +545,7 @@ struct publication *tipc_nametbl_remove_publ(struct net *net, u32 type,
  *   and returns 0
  */
 u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
-			   u32 *destnode)
+			   u32 *destnode, unsigned int msg_imp)
 {
 	struct tipc_net *tn = net_generic(net, tipc_net_id);
 	struct sub_seq *sseq;
@@ -531,6 +554,7 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 	struct name_seq *seq;
 	u32 ref = 0;
 	u32 node = 0;
+	u32 attempts = 0;
 
 	if (!tipc_in_scope(*destnode, tn->own_addr))
 		return 0;
@@ -548,27 +572,44 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 	/* Closest-First Algorithm */
 	if (likely(!*destnode)) {
 		if (!list_empty(&info->node_list)) {
-			publ = list_first_entry(&info->node_list,
+			do {
+				publ = list_first_entry(&info->node_list,
 						struct publication,
 						node_list);
-			list_move_tail(&publ->node_list,
+				list_move_tail(&publ->node_list,
 				       &info->node_list);
+				if (++attempts > info->node_list_size)
+					break;
+			} while (congestion_level(msg_imp) <= publ->cong);
 		} else if (!list_empty(&info->cluster_list)) {
-			publ = list_first_entry(&info->cluster_list,
+			do {
+				publ = list_first_entry(&info->cluster_list,
 						struct publication,
 						cluster_list);
-			list_move_tail(&publ->cluster_list,
+				list_move_tail(&publ->cluster_list,
 				       &info->cluster_list);
+				if (++attempts > info->cluster_list_size)
+					break;
+			} while (congestion_level(msg_imp) <= publ->cong);
 		} else {
-			publ = list_first_entry(&info->zone_list,
+			do {
+				publ = list_first_entry(&info->zone_list,
 						struct publication,
 						zone_list);
-			list_move_tail(&publ->zone_list,
+				/* zone_list might be empty ?Erik 
+				if (!publ)
+					break;
+				*/
+				list_move_tail(&publ->zone_list,
 				       &info->zone_list);
+				if (++attempts > info->zone_list_size)
+					break;
+			} while (congestion_level(msg_imp) <= publ->cong);
 		}
 	}
 
 	/* Round-Robin Algorithm */
+	/*
 	else if (*destnode == tn->own_addr) {
 		if (list_empty(&info->node_list))
 			goto no_match;
@@ -585,6 +626,39 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 		publ = list_first_entry(&info->zone_list, struct publication,
 					zone_list);
 		list_move_tail(&publ->zone_list, &info->zone_list);
+	}
+	*/
+	
+	/* Round-Robin Algorithm with congestion flag */
+	else if (*destnode == tn->own_addr) {
+		if (list_empty(&info->node_list))
+			goto no_match;
+		do {
+			publ = list_first_entry(&info->node_list, struct publication,
+					node_list);
+			list_move_tail(&publ->node_list, &info->node_list);
+			if (++attempts > info->node_list_size)
+					break;
+		} while (congestion_level(msg_imp) <= publ->cong);
+	} else if (in_own_cluster_exact(net, *destnode)) {
+		if (list_empty(&info->cluster_list))
+			goto no_match;
+		do {
+			publ = list_first_entry(&info->cluster_list, struct publication,
+					cluster_list);
+			list_move_tail(&publ->cluster_list, &info->cluster_list);
+			if (++attempts > info->cluster_list_size)
+					break;
+		} while (congestion_level(msg_imp) <= publ->cong);
+	} else {
+		// same Q: can zone_list be empty ?Erik
+		do {
+			publ = list_first_entry(&info->zone_list, struct publication,
+					zone_list);
+			list_move_tail(&publ->zone_list, &info->zone_list);
+			if (++attempts > info->zone_list_size)
+					break;
+		} while (congestion_level(msg_imp) <= publ->cong);
 	}
 
 	ref = publ->ref;
@@ -667,7 +741,7 @@ struct publication *tipc_nametbl_publish(struct net *net, u32 type, u32 lower,
 	}
 
 	publ = tipc_nametbl_insert_publ(net, type, lower, upper, scope,
-					tn->own_addr, port_ref, key);
+					tn->own_addr, port_ref, key, TIPC_CONGESTION_NONE);
 	if (likely(publ)) {
 		tn->nametbl->local_publ_count++;
 		buf = tipc_named_publish(net, publ);

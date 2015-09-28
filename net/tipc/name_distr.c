@@ -63,6 +63,7 @@ static void publ_to_item(struct distr_item *i, struct publication *p)
 	i->upper = htonl(p->upper);
 	i->ref = htonl(p->ref);
 	i->key = htonl(p->key);
+	i->cong = htonl(p->cong);
 }
 
 /**
@@ -134,6 +135,31 @@ struct sk_buff *tipc_named_publish(struct net *net, struct publication *publ)
 	publ_to_item(item, publ);
 	return buf;
 }
+
+/**
+ * tipc_named_publish_update - tell other nodes about an updated publication by this node
+ * // most code is from tipc_named_publish, maybe reduce common code ?Erik
+ * // rename to tipc_named_update ?Erik
+ */
+struct sk_buff *tipc_named_publish_update(struct net *net, struct publication *publ)
+{
+	struct sk_buff *buf;
+	struct distr_item *item;
+
+	if (publ->scope == TIPC_NODE_SCOPE)
+		return NULL;
+
+	buf = named_prepare_buf(net, PUBLICATION, ITEM_SIZE, 0);
+	if (!buf) {
+		pr_warn("Publication update distribution failure\n");
+		return NULL;
+	}
+
+	item = (struct distr_item *)msg_data(buf_msg(buf));
+	publ_to_item(item, publ);
+	return buf;
+}
+
 
 /**
  * tipc_named_withdraw - tell other nodes about a withdrawn publication by this node
@@ -315,7 +341,7 @@ static bool tipc_update_nametbl(struct net *net, struct distr_item *i,
 						ntohl(i->lower),
 						ntohl(i->upper),
 						TIPC_CLUSTER_SCOPE, node,
-						ntohl(i->ref), ntohl(i->key));
+						ntohl(i->ref), ntohl(i->key), ntohl(i->cong));
 		if (publ) {
 			tipc_publ_subscribe(net, publ, node);
 			return true;

@@ -65,9 +65,11 @@ struct distr_item {
 	__be32 upper;
 	__be32 ref;
 	__be32 key;
+	__be32 cong;
 };
 
 struct sk_buff *tipc_named_publish(struct net *net, struct publication *publ);
+struct sk_buff *tipc_named_publish_update(struct net *net, struct publication *publ);
 struct sk_buff *tipc_named_withdraw(struct net *net, struct publication *publ);
 void named_cluster_distribute(struct net *net, struct sk_buff *buf);
 void tipc_named_node_up(struct net *net, u32 dnode);

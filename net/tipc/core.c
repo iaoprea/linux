@@ -48,6 +48,7 @@
 /* configurable TIPC parameters */
 int tipc_net_id __read_mostly;
 int sysctl_tipc_rmem[3] __read_mostly;	/* min/default/max */
+int sysctl_tipc_congestion_control[2] __read_mostly; /* RDM congestion control watermarks: high/low watermark */
 
 static int __net_init tipc_init_net(struct net *net)
 {
@@ -107,6 +108,9 @@ static int __init tipc_init(void)
 	sysctl_tipc_rmem[1] = TIPC_CONN_OVERLOAD_LIMIT >> 4 <<
 			      TIPC_CRITICAL_IMPORTANCE;
 	sysctl_tipc_rmem[2] = TIPC_CONN_OVERLOAD_LIMIT;
+
+	sysctl_tipc_congestion_control[0] = 75;
+	sysctl_tipc_congestion_control[1] = 25;
 
 	err = tipc_netlink_start();
 	if (err)
