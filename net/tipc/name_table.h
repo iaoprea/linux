@@ -114,7 +114,7 @@ int tipc_nametbl_mc_early_congestion(struct net *net, u32 type,
 				     u32 lower, u32 upper, int imp);
 struct publication *tipc_nametbl_publish(struct net *net, u32 type, u32 lower,
 					 u32 upper, u32 scope, u32 port_ref,
-					 u32 key);
+					 u32 key, u32 cong);
 int tipc_nametbl_withdraw(struct net *net, u32 type, u32 lower, u32 ref,
 			  u32 key);
 struct publication *tipc_nametbl_insert_publ(struct net *net, u32 type,

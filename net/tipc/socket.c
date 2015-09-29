@@ -67,6 +67,7 @@
  * @port_list: adjacent ports in TIPC's global list of ports
  * @publications: list of publications for port
  * @pub_count: total # of publications port has made during its lifetime
+ * @cong: socket is congested. same for its associated publications
  * @probing_state:
  * @probing_intv:
  * @conn_timeout: the time we can wait for an unresponded setup request
@@ -90,15 +91,7 @@ struct tipc_sock {
 	struct list_head sock_list;
 	struct list_head publications;
 	u32 pub_count;
-	/*
-	u32 cong; // tipc socket is congested
-	// Should this flag exist here ?Erik
-	// If a socket is congested, all its publications are congested
-	// and are already marked as congested in publ->cong.
-	// Should this info be stored in tipc_sock also ?
-	// Can a tipc_sock exist without publications ?
-	// Can a tip_sock be congested without having publications ?
-	*/
+	u32 cong;
 	u32 probing_state;
 	unsigned long probing_intv;
 	uint conn_timeout;
@@ -372,6 +365,7 @@ static int tipc_sk_create(struct net *net, struct socket *sock,
 	tsk = tipc_sk(sk);
 	tsk->max_pkt = MAX_PKT_DEFAULT;
 	INIT_LIST_HEAD(&tsk->publications);
+	tsk->cong = TIPC_CONGESTION_NONE;
 	msg = &tsk->phdr;
 	tn = net_generic(sock_net(sk), tipc_net_id);
 	tipc_msg_init(tn->own_addr, msg, TIPC_LOW_IMPORTANCE, TIPC_NAMED_MSG,
@@ -1308,8 +1302,6 @@ static int tipc_recvmsg(struct socket *sock, struct msghdr *m, size_t buf_len,
 	struct tipc_sock *tsk = tipc_sk(sk);
 	struct sk_buff *buf;
 	struct tipc_msg *msg;
-	struct publication *p;
-	unsigned int tsk_cong;
 	long timeo;
 	unsigned int sz;
 	u32 err;
@@ -1381,27 +1373,18 @@ restart:
 		}
 		tsk_advance_rx_queue(sk);
 	}
-exit:
-	release_sock(sk);
 
 	/* Decongestion check */
-	// move this before the exit tag
-
-	// get the socket congestion level
-	p = list_first_entry(&tsk->publications, struct publication, pport_list);
-	tsk_cong = p ? p->cong : TIPC_CONGESTION_NONE;
-
-	if (unlikely(tsk_cong)) {
-		// get the receive buffer size based on tsk_cong
-		unsigned int limit = sk->sk_rcvbuf >> TIPC_CRITICAL_IMPORTANCE << tsk_cong;
-		unsigned int limit_decong = (unsigned int) limit * (sysctl_tipc_congestion_control[1] * 100);
-
+	if (unlikely(tsk->cong)) {
+		unsigned int limit = sk->sk_rcvbuf >> TIPC_CRITICAL_IMPORTANCE << tsk->cong;
+		unsigned int limit_decong = (unsigned int) limit * 100 / sysctl_tipc_congestion_control[1];
 		if (unlikely(sk_rmem_alloc_get(sk) <= limit_decong)) {
-			tipc_sk_congestion (tsk, TIPC_CONGESTION_NONE );
+			tipc_sk_congestion (tsk, tsk->cong - 1 );
 		}
 	}
-	// can a message be so big that the congestion level drops 2 levels ?Erik 
 
+exit:
+	release_sock(sk);
 	return res;
 }
 
@@ -1686,7 +1669,7 @@ static bool filter_rcv(struct sock *sk, struct sk_buff *skb)
 	struct tipc_sock *tsk = tipc_sk(sk);
 	struct tipc_msg *hdr = buf_msg(skb);
 	unsigned int limit = rcvbuf_limit(sk, skb);
-	unsigned int limit_cong = (unsigned int) limit * (sysctl_tipc_congestion_control[0] * 100);
+	unsigned int limit_cong = (unsigned int) limit * 100 / sysctl_tipc_congestion_control[0];
 	int err = TIPC_OK;
 	int usr = msg_user(hdr);
 
@@ -1726,7 +1709,6 @@ static bool filter_rcv(struct sock *sk, struct sk_buff *skb)
 	}
 
 	/* Trigger congestion signaling */
-	// Should this be done after sk_data_ready ?Erik
 	if (unlikely(sk_rmem_alloc_get(sk) + skb->truesize >= limit_cong)) {
 		tipc_sk_congestion (tsk, congestion_level(msg_importance(buf_msg(skb))));
 	}
@@ -2232,7 +2214,7 @@ static int tipc_sk_publish(struct tipc_sock *tsk, uint scope,
 		return -EADDRINUSE;
 
 	publ = tipc_nametbl_publish(net, seq->type, seq->lower, seq->upper,
-				    scope, tsk->portid, key);
+				    scope, tsk->portid, key, tsk->cong);
 	if (unlikely(!publ))
 		return -EINVAL;
 
@@ -2279,31 +2261,27 @@ static int tipc_sk_withdraw(struct tipc_sock *tsk, uint scope,
 static void tipc_sk_congestion(struct tipc_sock *tsk, unsigned int cong)
 {
 	struct publication *p = list_first_entry(&tsk->publications, struct publication, pport_list);
-	unsigned int tsk_cong = p ? p->cong : 0;
 	struct sk_buff *pbuf = NULL;
 	struct net *net = sock_net(&tsk->sk);
 
-	/* a higher level of congestion has already been detected and signaled */
-	if (tsk_cong >= cong)
+	/* current level of congestion has already been detected and signaled */
+	if (tsk->cong == cong)
 		return;
+	tsk->cong = cong;
 
-	/* congestion detected */
-	/* update congestion flag for each publication */
+	/* a new (higher or lower) level of congestion has been detected */
+	/* update congestion flag for each publication and redistribute*/
 	list_for_each_entry(p, &tsk->publications, pport_list) {
 		p->cong = cong;
 		/* set the flag directly or
 		create publ_update(publication *, int, int...) in name_tbl.c ?Erik
-		(similar to publ_create)
-		*/
-	}
-
-	/* redistribute publications */
-	list_for_each_entry(p, &tsk->publications, pport_list) {
-		// merge the two fors ?Erik
+		(similar to publ_create) */
 		pbuf = NULL;
-		pbuf = tipc_named_publish_update(net, p);
+		pbuf = tipc_named_update(net, p);
 		if(pbuf)
 			named_cluster_distribute(net, pbuf);
+		/* Erik: An optimization point here, we should only need to send out the notification
+		once for every socket, regardless of the number of publications bound to it. */
 	}
 }
 

@@ -116,32 +116,17 @@ void named_cluster_distribute(struct net *net, struct sk_buff *skb)
 struct sk_buff *tipc_named_publish(struct net *net, struct publication *publ)
 {
 	struct tipc_net *tn = net_generic(net, tipc_net_id);
-	struct sk_buff *buf;
-	struct distr_item *item;
 
 	list_add_tail_rcu(&publ->local_list,
 			  &tn->nametbl->publ_list[publ->scope]);
 
-	if (publ->scope == TIPC_NODE_SCOPE)
-		return NULL;
-
-	buf = named_prepare_buf(net, PUBLICATION, ITEM_SIZE, 0);
-	if (!buf) {
-		pr_warn("Publication distribution failure\n");
-		return NULL;
-	}
-
-	item = (struct distr_item *)msg_data(buf_msg(buf));
-	publ_to_item(item, publ);
-	return buf;
+	return tipc_named_update(net, publ);
 }
 
 /**
  * tipc_named_publish_update - tell other nodes about an updated publication by this node
- * // most code is from tipc_named_publish, maybe reduce common code ?Erik
- * // rename to tipc_named_update ?Erik
  */
-struct sk_buff *tipc_named_publish_update(struct net *net, struct publication *publ)
+struct sk_buff *tipc_named_update(struct net *net, struct publication *publ)
 {
 	struct sk_buff *buf;
 	struct distr_item *item;
@@ -151,7 +136,7 @@ struct sk_buff *tipc_named_publish_update(struct net *net, struct publication *p
 
 	buf = named_prepare_buf(net, PUBLICATION, ITEM_SIZE, 0);
 	if (!buf) {
-		pr_warn("Publication update distribution failure\n");
+		pr_warn("Publication distribution failure\n");
 		return NULL;
 	}
 

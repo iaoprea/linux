@@ -119,7 +119,7 @@ static int hash(int x)
  */
 static struct publication *publ_create(u32 type, u32 lower, u32 upper,
 				       u32 scope, u32 node, u32 port_ref,
-				       u32 key)
+				       u32 key, u32 cong)
 {
 	struct publication *publ = kzalloc(sizeof(*publ), GFP_ATOMIC);
 	if (publ == NULL) {
@@ -134,7 +134,7 @@ static struct publication *publ_create(u32 type, u32 lower, u32 upper,
 	publ->node = node;
 	publ->ref = port_ref;
 	publ->key = key;
-	publ->cong = TIPC_CONGESTION_NONE;
+	publ->cong = cong;
 	INIT_LIST_HEAD(&publ->pport_list);
 	return publ;
 }
@@ -314,8 +314,7 @@ static struct publication *tipc_nameseq_insert_publ(struct net *net,
 	}
 
 	/* Insert a publication */
-	publ = publ_create(type, lower, upper, scope, node, port, key);
-	// can a publication be congested when it is published the first time ?Erik
+	publ = publ_create(type, lower, upper, scope, node, port, key, cong);
 	if (!publ)
 		return NULL;
 
@@ -602,10 +601,6 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 				publ = list_first_entry(&info->zone_list,
 						struct publication,
 						zone_list);
-				/* zone_list might be empty ?Erik 
-				if (!publ)
-					break;
-				*/
 				list_move_tail(&publ->zone_list,
 				       &info->zone_list);
 				if (++attempts > info->zone_list_size)
@@ -634,7 +629,7 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 		list_move_tail(&publ->zone_list, &info->zone_list);
 	}
 	*/
-	
+
 	/* Round-Robin Algorithm with congestion flag */
 	else if (*destnode == tn->own_addr) {
 		if (list_empty(&info->node_list))
@@ -657,7 +652,6 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 				goto found_congested;
 		} while (congestion_level(msg_imp) <= publ->cong);
 	} else {
-		// same Q: can zone_list be empty ?Erik
 		do {
 			publ = list_first_entry(&info->zone_list, struct publication,
 					zone_list);
@@ -787,7 +781,7 @@ exit:
  */
 struct publication *tipc_nametbl_publish(struct net *net, u32 type, u32 lower,
 					 u32 upper, u32 scope, u32 port_ref,
-					 u32 key)
+					 u32 key, u32 cong)
 {
 	struct publication *publ;
 	struct sk_buff *buf = NULL;
@@ -802,7 +796,7 @@ struct publication *tipc_nametbl_publish(struct net *net, u32 type, u32 lower,
 	}
 
 	publ = tipc_nametbl_insert_publ(net, type, lower, upper, scope,
-					tn->own_addr, port_ref, key, TIPC_CONGESTION_NONE);
+					tn->own_addr, port_ref, key, cong);
 	if (likely(publ)) {
 		tn->nametbl->local_publ_count++;
 		buf = tipc_named_publish(net, publ);

@@ -49,6 +49,8 @@
 int tipc_net_id __read_mostly;
 int sysctl_tipc_rmem[3] __read_mostly;	/* min/default/max */
 int sysctl_tipc_congestion_control[2] __read_mostly; /* RDM congestion control watermarks: high/low watermark */
+/* use the same watermarks for all congestion levels?
+or introduce one control for each level congestion ?Erik */
 
 static int __net_init tipc_init_net(struct net *net)
 {

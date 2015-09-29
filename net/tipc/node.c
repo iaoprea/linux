@@ -937,7 +937,8 @@ void tipc_node_unlock(struct tipc_node *node)
 
 	if (flags & TIPC_NOTIFY_LINK_UP)
 		tipc_nametbl_publish(net, TIPC_LINK_STATE, addr, addr,
-				     TIPC_NODE_SCOPE, link_id, addr);
+				     TIPC_NODE_SCOPE, link_id, addr,
+				     TIPC_CONGESTION_NONE);
 
 	if (flags & TIPC_NOTIFY_LINK_DOWN)
 		tipc_nametbl_withdraw(net, TIPC_LINK_STATE, addr,
