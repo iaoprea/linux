@@ -110,6 +110,8 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance, u32 *node,
 			   unsigned int msg_imp);
 int tipc_nametbl_mc_translate(struct net *net, u32 type, u32 lower, u32 upper,
 			      u32 limit, struct tipc_plist *dports);
+int tipc_nametbl_mc_early_congestion(struct net *net, u32 type,
+				     u32 lower, u32 upper, int imp);
 struct publication *tipc_nametbl_publish(struct net *net, u32 type, u32 lower,
 					 u32 upper, u32 scope, u32 port_ref,
 					 u32 key);

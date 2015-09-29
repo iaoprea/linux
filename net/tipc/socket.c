@@ -689,6 +689,13 @@ static int tipc_sendmcast(struct  socket *sock, struct tipc_name_seq *seq,
 	uint mtu;
 	int rc;
 
+	/* check that all ports in type,lower,upper are congestion-free */
+	rc = tipc_nametbl_mc_early_congestion(net, seq->type, seq->lower,
+					seq->upper, tsk_importance(tsk));
+	if (unlikely(rc < 0)) {
+		return rc; // -EAGAIN
+	}
+
 	msg_set_type(mhdr, TIPC_MCAST_MSG);
 	msg_set_lookup_scope(mhdr, TIPC_CLUSTER_SCOPE);
 	msg_set_destport(mhdr, 0);
@@ -924,9 +931,12 @@ static int __tipc_sendmsg(struct socket *sock, struct msghdr *m, size_t dsz)
 		dport = tipc_nametbl_translate(net, type, inst, &dnode, msg_importance(mhdr));
 		msg_set_destnode(mhdr, dnode);
 		msg_set_destport(mhdr, dport);
+		if (unlikely(!dport && dnode))
+			return -EAGAIN;
 		if (unlikely(!dport && !dnode))
 			return -EHOSTUNREACH;
 	} else if (dest->addrtype == TIPC_ADDR_ID) {
+		// check congestion for this case too ?Erik
 		dnode = dest->addr.id.node;
 		msg_set_type(mhdr, TIPC_DIRECT_MSG);
 		msg_set_lookup_scope(mhdr, 0);
@@ -1375,6 +1385,7 @@ exit:
 	release_sock(sk);
 
 	/* Decongestion check */
+	// move this before the exit tag
 
 	// get the socket congestion level
 	p = list_first_entry(&tsk->publications, struct publication, pport_list);

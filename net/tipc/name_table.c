@@ -543,6 +543,12 @@ int congestion_level (int msg_imp)
  *   to publishing node and returns port reference (will be non-zero)
  * - if name translation is attempted and fails, sets 'destnode' to 0
  *   and returns 0
+ * - congestion detection (same return values as deferred case):
+ *   all the ports are congested; set destnode to any node that has
+ *   a matching publication; return 0;
+ *   (this assumes that only multicast/bclink messages travel with
+ *   dnode set and dport zero; this combination of return value is
+ *   unused for unicast/TIPC_ADD_NAME messages)
  */
 u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 			   u32 *destnode, unsigned int msg_imp)
@@ -579,7 +585,7 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 				list_move_tail(&publ->node_list,
 				       &info->node_list);
 				if (++attempts > info->node_list_size)
-					break;
+					goto found_congested;
 			} while (congestion_level(msg_imp) <= publ->cong);
 		} else if (!list_empty(&info->cluster_list)) {
 			do {
@@ -589,7 +595,7 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 				list_move_tail(&publ->cluster_list,
 				       &info->cluster_list);
 				if (++attempts > info->cluster_list_size)
-					break;
+					goto found_congested;
 			} while (congestion_level(msg_imp) <= publ->cong);
 		} else {
 			do {
@@ -603,7 +609,7 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 				list_move_tail(&publ->zone_list,
 				       &info->zone_list);
 				if (++attempts > info->zone_list_size)
-					break;
+					goto found_congested;
 			} while (congestion_level(msg_imp) <= publ->cong);
 		}
 	}
@@ -638,7 +644,7 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 					node_list);
 			list_move_tail(&publ->node_list, &info->node_list);
 			if (++attempts > info->node_list_size)
-					break;
+				goto found_congested;
 		} while (congestion_level(msg_imp) <= publ->cong);
 	} else if (in_own_cluster_exact(net, *destnode)) {
 		if (list_empty(&info->cluster_list))
@@ -648,7 +654,7 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 					cluster_list);
 			list_move_tail(&publ->cluster_list, &info->cluster_list);
 			if (++attempts > info->cluster_list_size)
-					break;
+				goto found_congested;
 		} while (congestion_level(msg_imp) <= publ->cong);
 	} else {
 		// same Q: can zone_list be empty ?Erik
@@ -657,11 +663,12 @@ u32 tipc_nametbl_translate(struct net *net, u32 type, u32 instance,
 					zone_list);
 			list_move_tail(&publ->zone_list, &info->zone_list);
 			if (++attempts > info->zone_list_size)
-					break;
+				goto found_congested;
 		} while (congestion_level(msg_imp) <= publ->cong);
 	}
 
 	ref = publ->ref;
+found_congested:
 	node = publ->node;
 no_match:
 	spin_unlock_bh(&seq->lock);
@@ -719,6 +726,60 @@ int tipc_nametbl_mc_translate(struct net *net, u32 type, u32 lower, u32 upper,
 exit:
 	rcu_read_unlock();
 	return res;
+}
+
+
+/* tipc_nametbl_mc_early_congestion
+ * detect possible congestion on any of the ports that are
+ * receiving the multicast message
+ * @imp message/socket importance
+ *
+ * Returns zero if all the receiving ports are uncongested
+ * Returns -EAGAIN if at least one receiving port is congested
+ */
+int tipc_nametbl_mc_early_congestion(struct net *net, u32 type,
+				     u32 lower, u32 upper, int imp)
+{
+	struct name_seq *seq;
+	struct sub_seq *sseq;
+	struct sub_seq *sseq_stop;
+	struct name_info *info;
+	int res = 0;
+
+	rcu_read_lock();
+	seq = nametbl_find_seq(net, type);
+	if (!seq)
+		goto exit;
+
+	spin_lock_bh(&seq->lock);
+
+	sseq = seq->sseqs + nameseq_locate_subseq(seq, lower);
+	sseq_stop = seq->sseqs + seq->first_free;
+	for (; sseq != sseq_stop; sseq++) {
+		struct publication *publ;
+		if (sseq->lower > upper)
+			break;
+		info = sseq->info;
+		list_for_each_entry(publ, &info->node_list, node_list) {
+			if (imp <= publ->cong) {
+				res = -EAGAIN;
+				break;
+			}
+		}
+		list_for_each_entry(publ, &info->cluster_list, cluster_list) {
+			if (imp <= publ->cong) {
+				res = -EAGAIN;
+				break;
+			}
+		}
+		/* do no check zone_list, multicast spreads only in cluster */
+	}
+
+	spin_unlock_bh(&seq->lock);
+
+exit:
+	rcu_read_unlock();
+	return 0;
 }
 
 /*
